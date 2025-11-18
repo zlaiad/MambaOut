@@ -109,6 +109,12 @@ parser.add_argument('--apex-amp', action='store_true', default=False,
                     help='Use NVIDIA Apex AMP mixed precision')
 parser.add_argument('--native-amp', action='store_true', default=False,
                     help='Use Native Torch AMP mixed precision')
+parser.add_argument('--disable-gated-multiplication', action='store_true', default=False,
+                    help='Disable the multiplicative gating inside each MambaOut block for ablations')
+parser.add_argument('--disable-conv-branch', action='store_true', default=False,
+                    help='Disable the depth-wise convolution branch inside each MambaOut block for ablations')
+parser.add_argument('--disable-residual-connection', action='store_true', default=False,
+                    help='Disable the residual skip connection inside each MambaOut block for ablations')
 parser.add_argument('--tf-preprocessing', action='store_true', default=False,
                     help='Use Tensorflow preprocessing pipeline (require CPU TF installed')
 parser.add_argument('--use-ema', dest='use_ema', action='store_true',
@@ -159,13 +165,21 @@ def validate(args):
         set_fast_norm()
 
     # create model
-    model = create_model(
-        args.model,
+    model_kwargs = dict(
+        model_name=args.model,
         pretrained=args.pretrained,
         num_classes=args.num_classes,
         in_chans=3,
         global_pool=args.gp,
-        scriptable=args.torchscript)
+        scriptable=args.torchscript,
+    )
+    if 'mambaout' in args.model:
+        model_kwargs.update(dict(
+            use_gated_multiplication=not args.disable_gated_multiplication,
+            use_conv_branch=not args.disable_conv_branch,
+            use_residual_connection=not args.disable_residual_connection,
+        ))
+    model = create_model(**model_kwargs)
     if args.num_classes is None:
         assert hasattr(model, 'num_classes'), 'Model must have `num_classes` attr if not set on cmd line/config.'
         args.num_classes = model.num_classes
