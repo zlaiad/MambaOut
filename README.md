@@ -97,6 +97,15 @@ python3 validate.py /path/to/imagenet  --model $MODEL -b 128 \
   --pretrained
 ```
 
+### Ablation switches
+For ablation studies you can enable or disable specific components inside every MambaOut block directly from the training and validation scripts:
+
+* `--disable-gated-multiplication` removes the multiplicative gate between the token-mixing and feature branches.
+* `--disable-conv-branch` drops the depth-wise convolution branch so the blocks degenerate to pure MLP-style token mixers.
+* `--disable-residual-connection` removes the residual skip path of each block.
+
+Each flag can be toggled independently, which makes it straightforward to compare different module configurations against the baseline.
+
 ## Train
 We use batch size of 4096 by default and we show how to train models with 8 GPUs. For multi-node training, adjust `--grad-accum-steps` according to your situations.
 

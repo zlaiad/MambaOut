@@ -165,6 +165,12 @@ group.add_argument('--fast-norm', default=False, action='store_true',
                     help='enable experimental fast-norm')
 group.add_argument('--grad-checkpointing', action='store_true', default=False,
                     help='Enable gradient checkpointing through model blocks/stages')
+group.add_argument('--disable-gated-multiplication', action='store_true', default=False,
+                    help='Disable the multiplicative gating inside each MambaOut block for ablations')
+group.add_argument('--disable-conv-branch', action='store_true', default=False,
+                    help='Disable the depth-wise convolution branch inside each MambaOut block for ablations')
+group.add_argument('--disable-residual-connection', action='store_true', default=False,
+                    help='Disable the residual skip connection inside each MambaOut block for ablations')
 
 # Optimizer parameters
 group = parser.add_argument_group('Optimizer parameters')
@@ -444,6 +450,13 @@ def main():
         scriptable=args.torchscript,
         checkpoint_path=args.initial_checkpoint
     )
+
+    if 'mambaout' in args.model:
+        create_model_args.update(dict(
+            use_gated_multiplication=not args.disable_gated_multiplication,
+            use_conv_branch=not args.disable_conv_branch,
+            use_residual_connection=not args.disable_residual_connection,
+        ))
 
     model = create_model(**create_model_args)
 

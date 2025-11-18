@@ -118,25 +118,36 @@ class MlpHead(nn.Module):
 
 class GatedCNNBlock(nn.Module):
     r""" Our implementation of Gated CNN Block: https://arxiv.org/pdf/1612.08083
-    Args: 
+    Args:
         conv_ratio: control the number of channels to conduct depthwise convolution.
             Conduct convolution on partial channels can improve practical efficiency.
-            The idea of partial channels is from ShuffleNet V2 (https://arxiv.org/abs/1807.11164) and 
+            The idea of partial channels is from ShuffleNet V2 (https://arxiv.org/abs/1807.11164) and
             also used by InceptionNeXt (https://arxiv.org/abs/2303.16900) and FasterNet (https://arxiv.org/abs/2303.03667)
+        use_gated_multiplication: enable the multiplicative gate between token mixing and features.
+        use_conv_branch: enable the depth-wise convolution branch inside the block.
+        use_residual_connection: keep the residual connection of the block.
     """
     def __init__(self, dim, expansion_ratio=8/3, kernel_size=7, conv_ratio=1.0,
-                 norm_layer=partial(nn.LayerNorm,eps=1e-6), 
+                 norm_layer=partial(nn.LayerNorm,eps=1e-6),
                  act_layer=nn.GELU,
                  drop_path=0.,
+                 use_gated_multiplication=True,
+                 use_conv_branch=True,
+                 use_residual_connection=True,
                  **kwargs):
         super().__init__()
         self.norm = norm_layer(dim)
         hidden = int(expansion_ratio * dim)
         self.fc1 = nn.Linear(dim, hidden * 2)
         self.act = act_layer()
-        conv_channels = int(conv_ratio * dim)
+        self.use_gated_multiplication = use_gated_multiplication
+        self.use_residual_connection = use_residual_connection
+        conv_channels = int(conv_ratio * dim) if use_conv_branch else 0
         self.split_indices = (hidden, hidden - conv_channels, conv_channels)
-        self.conv = nn.Conv2d(conv_channels, conv_channels, kernel_size=kernel_size, padding=kernel_size//2, groups=conv_channels)
+        if conv_channels > 0:
+            self.conv = nn.Conv2d(conv_channels, conv_channels, kernel_size=kernel_size, padding=kernel_size//2, groups=conv_channels)
+        else:
+            self.conv = None
         self.fc2 = nn.Linear(hidden, dim)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
@@ -144,12 +155,20 @@ class GatedCNNBlock(nn.Module):
         shortcut = x # [B, H, W, C]
         x = self.norm(x)
         g, i, c = torch.split(self.fc1(x), self.split_indices, dim=-1)
-        c = c.permute(0, 3, 1, 2) # [B, H, W, C] -> [B, C, H, W]
-        c = self.conv(c)
-        c = c.permute(0, 2, 3, 1) # [B, C, H, W] -> [B, H, W, C]
-        x = self.fc2(self.act(g) * torch.cat((i, c), dim=-1))
+        if self.conv is not None:
+            c = c.permute(0, 3, 1, 2) # [B, H, W, C] -> [B, C, H, W]
+            c = self.conv(c)
+            c = c.permute(0, 2, 3, 1) # [B, C, H, W] -> [B, H, W, C]
+        mix = torch.cat((i, c), dim=-1)
+        if self.use_gated_multiplication:
+            mix = self.act(g) * mix
+        else:
+            mix = self.act(g + mix)
+        x = self.fc2(mix)
         x = self.drop_path(x)
-        return x + shortcut
+        if self.use_residual_connection:
+            x = x + shortcut
+        return x
 
 r"""
 downsampling (stem) for the first stage is two layer of conv with k3, s2 and p1
@@ -176,7 +195,7 @@ class MambaOut(nn.Module):
         head_fn: classification head. Default: nn.Linear.
         head_dropout (float): dropout for MLP classifier. Default: 0.
     """
-    def __init__(self, in_chans=3, num_classes=1000, 
+    def __init__(self, in_chans=3, num_classes=1000,
                  depths=[3, 3, 9, 3],
                  dims=[96, 192, 384, 576],
                  downsample_layers=DOWNSAMPLE_LAYERS_FOUR_STAGES,
@@ -185,9 +204,12 @@ class MambaOut(nn.Module):
                  conv_ratio=1.0,
                  kernel_size=7,
                  drop_path_rate=0.,
-                 output_norm=partial(nn.LayerNorm, eps=1e-6), 
+                 output_norm=partial(nn.LayerNorm, eps=1e-6),
                  head_fn=MlpHead,
-                 head_dropout=0.0, 
+                 head_dropout=0.0,
+                 use_gated_multiplication=True,
+                 use_conv_branch=True,
+                 use_residual_connection=True,
                  **kwargs,
                  ):
         super().__init__()
@@ -219,6 +241,9 @@ class MambaOut(nn.Module):
                 act_layer=act_layer,
                 kernel_size=kernel_size,
                 conv_ratio=conv_ratio,
+                use_gated_multiplication=use_gated_multiplication,
+                use_conv_branch=use_conv_branch,
+                use_residual_connection=use_residual_connection,
                 drop_path=dp_rates[cur + j],
                 ) for j in range(depths[i])]
             )
